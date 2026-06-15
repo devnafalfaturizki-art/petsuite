@@ -73,6 +73,38 @@ enum GroomingStatus {
   COMPLETED
 }
 
+enum AuditAction {
+  CREATE
+  UPDATE
+  DELETE
+  LOGIN
+  LOGOUT
+  PAYMENT
+  INVOICE_CREATED
+  MODULE_ENABLED
+  MODULE_DISABLED
+  MEDICAL_RECORD_CREATED
+  APPOINTMENT_CREATED
+  APPOINTMENT_COMPLETED
+}
+
+enum QueueStatus {
+  PENDING
+  PROCESSING
+  SUCCESS
+  FAILED
+  RETRYING
+}
+
+enum MovementType {
+  IN
+  OUT
+  ADJUSTMENT
+  EXPIRED
+  PRESCRIPTION
+  POS
+}
+
 // ========================
 // CORE
 // ========================
@@ -85,6 +117,9 @@ model User {
   role      UserRole
   phone     String?
   avatar    String?
+  isLocked  Boolean  @default(false)
+  loginAttempts Int  @default(0)
+  lastLoginAt DateTime?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   deletedAt DateTime?
@@ -96,7 +131,9 @@ model User {
   inpatients     Inpatient[]
   invoices       Invoice[]
   notifications  Notification[]
+  notificationQueue NotificationQueue[]
   auditLogs      AuditLog[]
+  userPermissions UserPermission[]
 
   @@index([email])
   @@index([role])
@@ -131,7 +168,11 @@ model Clinic {
   suppliers      Supplier[]
   invoices       Invoice[]
   notifications  Notification[]
+  notificationQueue NotificationQueue[]
+  auditLogs      AuditLog[]
   transactions   AccountingTransaction[]
+  ledgerAccounts LedgerAccount[]
+  journalEntries JournalEntry[]
 
   @@index([slug])
   @@index([isActive])
@@ -169,6 +210,50 @@ model ClinicModule {
   @@index([clinicId])
   @@index([module])
   @@map("clinic_modules")
+}
+
+// ========================
+// PERMISSION MATRIX
+// ========================
+
+model Permission {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  key       String   @unique
+  group     String?
+  createdAt DateTime @default(now())
+
+  rolePermissions RolePermission[]
+  userPermissions UserPermission[]
+
+  @@index([key])
+  @@map("permissions")
+}
+
+model RolePermission {
+  id           String   @id @default(cuid())
+  role         UserRole
+  permissionId String
+  createdAt    DateTime @default(now())
+
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@unique([role, permissionId])
+  @@map("role_permissions")
+}
+
+model UserPermission {
+  id           String   @id @default(cuid())
+  userId       String
+  permissionId String
+  granted      Boolean  @default(true)
+  createdAt    DateTime @default(now())
+
+  user       User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, permissionId])
+  @@map("user_permissions")
 }
 
 // ========================
@@ -456,6 +541,8 @@ model Product {
   clinic      Clinic          @relation(fields: [clinicId], references: [id], onDelete: Cascade)
   supplier    Supplier?       @relation(fields: [supplierId], references: [id], onDelete: SetNull)
   stockMovements StockMovement[]
+  inventoryBatches InventoryBatch[]
+  inventoryMovements InventoryMovement[]
   prescriptions Prescription[]
   invoiceItems InvoiceItem[]
 
@@ -496,6 +583,44 @@ model StockMovement {
 
   @@index([productId])
   @@map("stock_movements")
+}
+
+// ========================
+// INVENTORY BATCH TRACKING
+// ========================
+
+model InventoryBatch {
+  id        String   @id @default(cuid())
+  productId String
+  batchNumber String?
+  expiryDate DateTime?
+  quantity  Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@index([productId])
+  @@index([batchNumber])
+  @@index([expiryDate])
+  @@map("inventory_batches")
+}
+
+model InventoryMovement {
+  id        String       @id @default(cuid())
+  productId String
+  type      MovementType
+  quantity  Int
+  reference String?
+  notes     String?
+  createdAt DateTime     @default(now())
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@index([productId])
+  @@index([type])
+  @@index([createdAt])
+  @@map("inventory_movements")
 }
 
 // ========================
@@ -594,6 +719,63 @@ model AccountingTransaction {
 }
 
 // ========================
+// ACCOUNTING LEDGER (Double-Entry)
+// ========================
+
+model LedgerAccount {
+  id        String   @id @default(cuid())
+  clinicId  String
+  code      String
+  name      String
+  type      String   // ASSET / LIABILITY / EQUITY / REVENUE / EXPENSE
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  clinic       Clinic            @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  journalLines JournalEntryLine[]
+
+  @@unique([clinicId, code])
+  @@index([clinicId])
+  @@index([type])
+  @@map("ledger_accounts")
+}
+
+model JournalEntry {
+  id          String   @id @default(cuid())
+  clinicId    String
+  entryNumber String   @unique
+  description String?
+  date        DateTime @default(now())
+  reference   String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  clinic Clinic              @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  lines  JournalEntryLine[]
+
+  @@index([clinicId])
+  @@index([date])
+  @@map("journal_entries")
+}
+
+model JournalEntryLine {
+  id              String  @id @default(cuid())
+  journalEntryId  String
+  accountId       String
+  debit           Float   @default(0)
+  credit          Float   @default(0)
+  description     String?
+
+  journalEntry JournalEntry  @relation(fields: [journalEntryId], references: [id], onDelete: Cascade)
+  account      LedgerAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@index([journalEntryId])
+  @@index([accountId])
+  @@map("journal_entry_lines")
+}
+
+// ========================
 // NOTIFICATION
 // ========================
 
@@ -621,23 +803,72 @@ model Notification {
 }
 
 // ========================
+// NOTIFICATION QUEUE
+// ========================
+
+model NotificationQueue {
+  id          String      @id @default(cuid())
+  clinicId    String
+  userId      String?
+  channel     String      // WHATSAPP / EMAIL
+  recipient   String
+  template    String?
+  payload     Json?
+  status      QueueStatus @default(PENDING)
+  retryCount  Int         @default(0)
+  maxRetries  Int         @default(3)
+  scheduledAt DateTime?
+  sentAt      DateTime?
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  clinic Clinic  @relation(fields: [clinicId], references: [id], onDelete: Cascade)
+  user   User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
+  logs   NotificationLog[]
+
+  @@index([clinicId])
+  @@index([status])
+  @@index([scheduledAt])
+  @@map("notification_queue")
+}
+
+model NotificationLog {
+  id        String   @id @default(cuid())
+  queueId   String
+  response  String?
+  status    String
+  createdAt DateTime @default(now())
+
+  queue NotificationQueue @relation(fields: [queueId], references: [id], onDelete: Cascade)
+
+  @@index([queueId])
+  @@map("notification_logs")
+}
+
+// ========================
 // AUDIT LOG
 // ========================
 
 model AuditLog {
-  id        String   @id @default(cuid())
-  userId    String
-  action    String
-  entity    String
-  entityId  String?
-  details   Json?
-  createdAt DateTime @default(now())
+  id         String      @id @default(cuid())
+  clinicId   String?
+  userId     String
+  action     AuditAction
+  entityType String
+  entityId   String?
+  oldValue   Json?
+  newValue   Json?
+  ipAddress  String?
+  userAgent  String?
+  createdAt  DateTime    @default(now())
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  clinic Clinic? @relation(fields: [clinicId], references: [id], onDelete: SetNull)
+  user   User    @relation(fields: [userId], references: [id], onDelete: Cascade)
 
+  @@index([clinicId])
   @@index([userId])
-  @@index([entity])
-  @@index([entityId])
+  @@index([action])
+  @@index([entityType])
   @@index([createdAt])
   @@map("audit_logs")
 }

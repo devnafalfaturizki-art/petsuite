@@ -1,4 +1,3 @@
-import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 
 // Define which routes are accessible by which roles
@@ -23,29 +22,7 @@ const publicRoutes = [
 const authRoutes = ["/login", "/register"];
 
 export async function middleware(request: NextRequest) {
-  let res = NextResponse.next();
   const pathname = request.nextUrl.pathname;
-
-  const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    {
-      cookies: {
-        getAll() {
-          return request.cookies.getAll();
-        },
-        setAll(cookiesToSet) {
-          cookiesToSet.forEach(({ name, value }) =>
-            request.cookies.set(name, value)
-          );
-          res = NextResponse.next({ request });
-          cookiesToSet.forEach(({ name, value, options }) =>
-            res.cookies.set(name, value, options)
-          );
-        },
-      },
-    }
-  );
 
   // Allow public routes
   if (
@@ -53,22 +30,54 @@ export async function middleware(request: NextRequest) {
       (route) => pathname === route || pathname.startsWith(route + "/")
     )
   ) {
-    // For auth routes, redirect to dashboard if already logged in
-    if (authRoutes.some((route) => pathname.startsWith(route))) {
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-      if (session) {
-        const { data: user } = await supabase
-          .from("users")
-          .select("role")
-          .eq("id", session.user.id)
-          .single();
+    return NextResponse.next();
+  }
 
-        if (user) {
-          const dashboardPath = getDashboardPath(user.role);
-          return NextResponse.redirect(new URL(dashboardPath, request.url));
-        }
+  // For protected routes, check if Supabase is configured
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+
+  if (!supabaseUrl || !supabaseAnonKey) {
+    // If Supabase not configured, allow access for development
+    return NextResponse.next();
+  }
+
+  // Dynamic import to avoid build-time errors when env vars are missing
+  const { createServerClient } = await import("@supabase/ssr");
+  let res = NextResponse.next();
+
+  const supabase = createServerClient(supabaseUrl, supabaseAnonKey, {
+    cookies: {
+      getAll() {
+        return request.cookies.getAll();
+      },
+      setAll(cookiesToSet) {
+        cookiesToSet.forEach(({ name, value }) =>
+          request.cookies.set(name, value)
+        );
+        res = NextResponse.next({ request });
+        cookiesToSet.forEach(({ name, value, options }) =>
+          res.cookies.set(name, value, options)
+        );
+      },
+    },
+  });
+
+  // For auth routes, redirect to dashboard if already logged in
+  if (authRoutes.some((route) => pathname.startsWith(route))) {
+    const {
+      data: { session },
+    } = await supabase.auth.getSession();
+    if (session) {
+      const { data: user } = await supabase
+        .from("users")
+        .select("role")
+        .eq("id", session.user.id)
+        .single();
+
+      if (user) {
+        const dashboardPath = getDashboardPath(user.role);
+        return NextResponse.redirect(new URL(dashboardPath, request.url));
       }
     }
     return res;

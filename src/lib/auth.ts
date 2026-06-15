@@ -1,10 +1,16 @@
 import { createClient } from "@supabase/supabase-js";
 import type { SessionUser } from "@/types";
 
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
+function getSupabaseClient() {
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
-export const supabase = createClient(supabaseUrl, supabaseAnonKey);
+  if (!supabaseUrl || !supabaseAnonKey) {
+    return null;
+  }
+
+  return createClient(supabaseUrl, supabaseAnonKey);
+}
 
 /**
  * Get the current session user from the request.
@@ -12,6 +18,9 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey);
  */
 export async function getSessionUser(): Promise<SessionUser | null> {
   try {
+    const supabase = getSupabaseClient();
+    if (!supabase) return null;
+
     const {
       data: { session },
     } = await supabase.auth.getSession();
@@ -46,6 +55,9 @@ export async function getSessionUser(): Promise<SessionUser | null> {
  */
 export async function getSessionUserWithClinic(): Promise<SessionUser | null> {
   try {
+    const supabase = getSupabaseClient();
+    if (!supabase) return null;
+
     const {
       data: { session },
     } = await supabase.auth.getSession();
