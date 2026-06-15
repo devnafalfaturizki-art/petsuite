@@ -1,4 +1,4 @@
-```markdown
+
 # PetCare Suite — Copilot Instructions
 
 ## Project
